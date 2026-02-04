@@ -51,7 +51,74 @@ runs:
             .map(p => new RegExp(p));
           const fullDetailsSummary = '${{ inputs.full-details-summary }}' === 'true';
 
-          // TODO: Implement API fetching
+          // Determine the commit SHA to check
+          const sha = context.payload.pull_request?.head?.sha || context.sha;
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const currentJob = process.env.GITHUB_JOB;
+
+          core.info(`Checking commit: ${sha}`);
+          core.info(`Current job: ${currentJob}`);
+
+          /**
+           * Fetch all check runs for the commit, deduplicated by app+name (keeping highest ID)
+           */
+          async function fetchCheckRuns() {
+            const checkRuns = new Map(); // Key: "app_slug/name", Value: check run object
+
+            // Get all check suites for the ref
+            const suites = await github.paginate(
+              github.rest.checks.listSuitesForRef,
+              { owner, repo, ref: sha, per_page: 100 }
+            );
+
+            // For each suite, get all check runs
+            for (const suite of suites) {
+              const runs = await github.paginate(
+                github.rest.checks.listForSuite,
+                { owner, repo, check_suite_id: suite.id, per_page: 100 }
+              );
+
+              for (const run of runs) {
+                // Skip runs with uninterpreted template syntax
+                if (run.name.includes('${{')) {
+                  core.debug(`Skipping check run with template syntax: ${run.name}`);
+                  continue;
+                }
+
+                const key = `${run.app?.slug || 'unknown'}/${run.name}`;
+                const existing = checkRuns.get(key);
+
+                // Keep the run with the highest ID (most recent)
+                if (!existing || run.id > existing.id) {
+                  checkRuns.set(key, run);
+                }
+              }
+            }
+
+            return Array.from(checkRuns.values());
+          }
+
+          /**
+           * Fetch all commit statuses for the commit
+           */
+          async function fetchCommitStatuses() {
+            const statuses = await github.paginate(
+              github.rest.repos.listCommitStatusesForRef,
+              { owner, repo, ref: sha, per_page: 100 }
+            );
+
+            // Deduplicate by context (keep the most recent, which is first in the list)
+            const seen = new Set();
+            return statuses.filter(status => {
+              if (seen.has(status.context)) {
+                return false;
+              }
+              seen.add(status.context);
+              return true;
+            });
+          }
+
           // TODO: Implement classification logic
           // TODO: Implement retry loop
           // TODO: Generate summary
