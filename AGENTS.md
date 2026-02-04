@@ -89,3 +89,13 @@ When modifying the action:
 2. Test in a real workflow if possible
 3. Verify all inputs work as documented
 4. Check that the summary output renders correctly
+5. After any change, push and observe CI:
+   ```bash
+   git push
+   gh run watch
+   ```
+   Or to see specific job logs:
+   ```bash
+   gh run list --limit 1
+   gh run view <run-id> --log
+   ```
