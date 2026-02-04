@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Merge Gatekeeper
-        uses: your-org/merge-gatekeeper@v1
+        uses: tamcore/merge-gatekeeper@master
         with:
           initial-delay: 10
           max-retries: 10
@@ -101,7 +101,7 @@ jobs:
     if: always() && !cancelled()
     steps:
       - name: Merge Gatekeeper
-        uses: your-org/merge-gatekeeper@v1
+        uses: tamcore/merge-gatekeeper@master
         with:
           initial-delay: 0
           max-retries: 3
@@ -109,17 +109,23 @@ jobs:
 
 ### Ignoring Specific Checks
 
-Use regex patterns to ignore certain checks:
+Use **regex patterns** (not glob wildcards) to ignore certain checks:
 
 ```yaml
 - name: Merge Gatekeeper
-  uses: your-org/merge-gatekeeper@v1
+  uses: tamcore/merge-gatekeeper@master
   with:
     ignored-name-patterns: |
       ^optional-.*
-      ^experimental/
+      ^experimental/.*
       coverage-report
+      merge-gatekeeper.*
 ```
+
+> **Note:** These are JavaScript regular expressions, not glob patterns.
+> - Use `.*` (dot-star) for "match anything", not `*` alone
+> - `merge-gatekeeper.*` matches `merge-gatekeeper-1`, `merge-gatekeeper-2`, etc.
+> - `^` anchors to the start, `$` anchors to the end
 
 ## Limitations
 
@@ -135,14 +141,14 @@ jobs:
   gatekeeper:
     runs-on: ubuntu-latest
     steps:
-      - uses: your-org/merge-gatekeeper@v1
+      - uses: tamcore/merge-gatekeeper@master
 
   # ❌ Bad - custom name causes mismatch
   gatekeeper:
     name: "My Custom Gatekeeper Name"
     runs-on: ubuntu-latest
     steps:
-      - uses: your-org/merge-gatekeeper@v1
+      - uses: tamcore/merge-gatekeeper@master
 ```
 
 ### Race Condition with Late-Starting Jobs
