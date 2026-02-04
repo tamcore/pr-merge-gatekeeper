@@ -291,11 +291,88 @@ runs:
             return { results: lastResults, hasFailure: true, timedOut: true };
           }
 
-          // TODO: Generate summary
+          /**
+           * Generate the GitHub Step Summary
+           */
+          function generateSummary(results, timedOut) {
+            const categoryEmoji = {
+              self: '🔵',
+              ignored: '⚪',
+              running: '🟡',
+              success: '🟢',
+              failure: '🔴'
+            };
 
-          core.info('Merge Gatekeeper initialized');
-          core.info(`Initial delay: ${initialDelay}s`);
-          core.info(`Max retries: ${maxRetries}`);
-          core.info(`Polling interval: ${pollingInterval}s`);
-          core.info(`Ignored patterns: ${ignoredPatterns.length}`);
-          core.info(`Full details summary: ${fullDetailsSummary}`);
+            const categoryLabel = {
+              self: 'Current Job',
+              ignored: 'Ignored',
+              running: 'Running',
+              success: 'Success',
+              failure: 'Failed'
+            };
+
+            // Filter results for summary
+            let summaryResults = results;
+            if (!fullDetailsSummary) {
+              // Only show failures, running, and self
+              summaryResults = results.filter(r =>
+                r.category === 'failure' || r.category === 'running' || r.category === 'self'
+              );
+            }
+
+            // Sort by category priority: failure, running, success, ignored, self
+            const categoryOrder = { failure: 0, running: 1, success: 2, ignored: 3, self: 4 };
+            summaryResults.sort((a, b) => categoryOrder[a.category] - categoryOrder[b.category]);
+
+            // Build summary table
+            let summary = '## Merge Gatekeeper Results\n\n';
+
+            if (timedOut) {
+              summary += '⚠️ **Warning:** Max retries exhausted with checks still running.\n\n';
+            }
+
+            const failureCount = results.filter(r => r.category === 'failure').length;
+            const runningCount = results.filter(r => r.category === 'running').length;
+            const successCount = results.filter(r => r.category === 'success').length;
+            const ignoredCount = results.filter(r => r.category === 'ignored').length;
+
+            summary += `**Summary:** ${successCount} passed, ${failureCount} failed, ${runningCount} running, ${ignoredCount} ignored\n\n`;
+
+            if (summaryResults.length > 0) {
+              summary += '| Status | Name | Type | Details |\n';
+              summary += '|--------|------|------|---------||\n';
+
+              for (const result of summaryResults) {
+                const emoji = categoryEmoji[result.category];
+                const label = categoryLabel[result.category];
+                const name = result.url ? `[${result.name}](${result.url})` : result.name;
+                const type = result.type === 'check_run' ? 'Check Run' : 'Status';
+                const details = result.conclusion || result.status || '-';
+
+                summary += `| ${emoji} ${label} | ${name} | ${type} | ${details} |\n`;
+              }
+            } else {
+              summary += '_No checks to display._\n';
+            }
+
+            return summary;
+          }
+
+          // Execute the main logic
+          try {
+            const { results, hasFailure, timedOut } = await run();
+
+            // Generate and write summary
+            const summary = generateSummary(results, timedOut);
+            await core.summary.addRaw(summary).write();
+
+            // Exit with appropriate status
+            if (hasFailure) {
+              const failedChecks = results.filter(r => r.category === 'failure');
+              core.setFailed(`${failedChecks.length} check(s) failed: ${failedChecks.map(r => r.name).join(', ')}`);
+            } else {
+              core.info('All required checks passed!');
+            }
+          } catch (error) {
+            core.setFailed(`Action failed with error: ${error.message}`);
+          }
