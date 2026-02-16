@@ -64,61 +64,73 @@ runs:
            * Fetch all check runs for the commit, deduplicated by app+name (keeping highest ID)
            */
           async function fetchCheckRuns() {
-            const checkRuns = new Map(); // Key: "app_slug/name", Value: check run object
+            try {
+              const checkRuns = new Map(); // Key: "app_slug/name", Value: check run object
 
-            // Get all check suites for the ref
-            const suites = await github.paginate(
-              github.rest.checks.listSuitesForRef,
-              { owner, repo, ref: sha, per_page: 100 }
-            );
-
-            // For each suite, get all check runs
-            for (const suite of suites) {
-              const runs = await github.paginate(
-                github.rest.checks.listForSuite,
-                { owner, repo, check_suite_id: suite.id, per_page: 100 }
+              // Get all check suites for the ref
+              const suites = await github.paginate(
+                github.rest.checks.listSuitesForRef,
+                { owner, repo, ref: sha, per_page: 100 }
               );
 
-              for (const run of runs) {
-                // Skip runs with uninterpreted template syntax
-                // Note: We construct the pattern to avoid GitHub parsing it as an expression
-                const templatePattern = '$' + '{{';
-                if (run.name.includes(templatePattern)) {
-                  core.debug(`Skipping check run with template syntax: ${run.name}`);
-                  continue;
-                }
+              // For each suite, get all check runs
+              for (const suite of suites) {
+                const runs = await github.paginate(
+                  github.rest.checks.listForSuite,
+                  { owner, repo, check_suite_id: suite.id, per_page: 100 }
+                );
 
-                const key = `${run.app?.slug || 'unknown'}/${run.name}`;
-                const existing = checkRuns.get(key);
+                for (const run of runs) {
+                  // Skip runs with uninterpreted template syntax
+                  // Note: We construct the pattern to avoid GitHub parsing it as an expression
+                  const templatePattern = '$' + '{{';
+                  if (run.name.includes(templatePattern)) {
+                    core.debug(`Skipping check run with template syntax: ${run.name}`);
+                    continue;
+                  }
 
-                // Keep the run with the highest ID (most recent)
-                if (!existing || run.id > existing.id) {
-                  checkRuns.set(key, run);
+                  const key = `${run.app?.slug || 'unknown'}/${run.name}`;
+                  const existing = checkRuns.get(key);
+
+                  // Keep the run with the highest ID (most recent)
+                  if (!existing || run.id > existing.id) {
+                    checkRuns.set(key, run);
+                  }
                 }
               }
-            }
 
-            return Array.from(checkRuns.values());
+              return Array.from(checkRuns.values());
+            } catch (error) {
+              // Handle API errors gracefully (e.g., HTML error pages from GitHub)
+              core.warning(`GitHub API error while fetching check runs: ${error.message}`);
+              return [];
+            }
           }
 
           /**
            * Fetch all commit statuses for the commit
            */
           async function fetchCommitStatuses() {
-            const statuses = await github.paginate(
-              github.rest.repos.listCommitStatusesForRef,
-              { owner, repo, ref: sha, per_page: 100 }
-            );
+            try {
+              const statuses = await github.paginate(
+                github.rest.repos.listCommitStatusesForRef,
+                { owner, repo, ref: sha, per_page: 100 }
+              );
 
-            // Deduplicate by context (keep the most recent, which is first in the list)
-            const seen = new Set();
-            return statuses.filter(status => {
-              if (seen.has(status.context)) {
-                return false;
-              }
-              seen.add(status.context);
-              return true;
-            });
+              // Deduplicate by context (keep the most recent, which is first in the list)
+              const seen = new Set();
+              return statuses.filter(status => {
+                if (seen.has(status.context)) {
+                  return false;
+                }
+                seen.add(status.context);
+                return true;
+              });
+            } catch (error) {
+              // Handle API errors gracefully (e.g., HTML error pages from GitHub)
+              core.warning(`GitHub API error while fetching commit statuses: ${error.message}`);
+              return [];
+            }
           }
 
           /**
@@ -190,6 +202,11 @@ runs:
           async function performCheck() {
             const checkRuns = await fetchCheckRuns();
             const statuses = await fetchCommitStatuses();
+
+            // If both API calls failed, throw an error to trigger retry
+            if (checkRuns.length === 0 && statuses.length === 0) {
+              core.warning('⚠️ GitHub API returned no data (possible temporary API issue). Will retry...');
+            }
 
             core.info(`Found ${checkRuns.length} check runs`);
             core.info(`Found ${statuses.length} commit statuses`);
@@ -321,7 +338,18 @@ runs:
               } else {
                 core.info(`🔍 Performing retry ${attempt}/${maxRetries}...`);
               }
-              const { results, hasFailure, hasRunning } = await performCheck();
+
+              let results, hasFailure, hasRunning;
+              try {
+                ({ results, hasFailure, hasRunning } = await performCheck());
+              } catch (error) {
+                core.warning(`⚠️ Error during check (attempt ${attempt}/${maxRetries}): ${error.message}`);
+                // On API errors, treat as if checks are still running and continue retrying
+                if (attempt === maxRetries) {
+                  throw error; // Re-throw on last attempt
+                }
+                continue; // Skip to next retry
+              }
 
               lastResults = results;
               lastHasFailure = hasFailure;
